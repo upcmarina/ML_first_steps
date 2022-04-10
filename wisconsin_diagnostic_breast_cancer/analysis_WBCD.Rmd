@@ -1,0 +1,344 @@
+---
+title: "Wisconsin Diagnostic Breast Cancer (WDBC)"
+author: "Marina Vallejo Vallés (marina.vallejo01@estudiant.upf.edu)"
+date: "Last update: `r format(Sys.time(), '%d %B, %Y')`"    
+output:
+  html_document:
+    toc: yes
+    fig_caption: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE}
+# Set a seed in order to be able to replicate the results, as we are working with random numbers
+set.seed(123456)
+```
+
+```{r, include=FALSE, warning=FALSE}
+library(tidymodels)
+library(ISLR)
+library(corrplot)
+library(randomForest)
+library(caret)
+library(gridExtra)
+library(class)
+library(gmodels)
+library(C50)
+library(nnet)
+library(NeuralNetTools)
+library(pROC)
+```
+
+**Brief introduction.**
+
+The Wisconsin Diagnostic Breast Cancer (WDBC) contains features computed from a digitized image of a fine needle
+aspirate (FNA) of a breast mass.
+
+In the literature they report that the two diagnosis results: B = benign, M = malignant are linearly separable using all 30 input features available in the data set. They also report that the best predictive accuracy is obtained using one separating plane in the 3-D space of Worst Area, Worst Smoothness and Mean Texture. With an estimated accuracy 97.5% using repeated	10-fold cross-validations.
+
+# EXPLORATORY DATA ANALYSIS
+
+**Work with the data set.**
+
+```{r}
+# Access the data:
+breast_dataset <- read.csv("data_WDBC.csv", sep=",")
+# Summary of the data:
+summary(breast_dataset)
+```
+
+The Breast Cancer Dataset contains a total number of 33 variables and 569 observations. The variables `X` and `id` are not interesting for our analysis, so we won't consider them later. There are no missing values in this data set, we don't need to perform imputation. All the variables are numeric, except `Diagnosis`, which is stored as a logical variable, this must be taken into account for future steps.
+
+Check diagnosis:
+```{r}
+cat(" Number cases with malignant tumor: ",sum(breast_dataset$diagnosis == "M"),"\n", "Number cases with benign tumor: ",sum(breast_dataset$diagnosis == "B"))
+
+cat(" From a total number of", nrow(breast_dataset), "tumor cases, ", (sum(breast_dataset$diagnosis == "M")/nrow(breast_dataset)*100), "% are malignant tumors.")
+```
+
+Pearson correlation:
+```{r}
+# Select part of the original data, as some variables are not of our interest:
+breast_df <- breast_dataset[,3:ncol(breast_dataset)-1]
+breast_df$diagnosis <- as.integer(factor(breast_df$diagnosis))-1
+
+breast_correlations <- cor(breast_df,method="pearson")
+
+# Generate correlation plot:
+corrplot(breast_correlations, hclust.method = "ward",method = "square", 
+          order = "FPC", type = "full", tl.col = "darkslategray",tl.cex=0.5)
+```
+
+As it is a huge matrix it is better not to include in the report the table of correlation values.
+
+Note that diagnosis has been changed, now Benign tumors are indicated as 0 and Malignant tumors as 1.
+
+# MODEL BUILDING
+
+Before starting with model building, we must pre-process the data. We will change the type of variable diagnosis and normalize data (with the custom made function *normalize*):
+```{r} 
+# Create function:
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+
+# Generate a seed to replicate later the results :
+set.seed(123)
+
+# Diagnosis as an integer:
+breast_dataset$diagnosis = as.integer(factor(breast_dataset$diagnosis))-1
+
+# Normalize data:
+breast_dataset_norm <- as.data.frame(lapply(breast_dataset[2:31], normalize))
+```
+
+Now we move to the model building. The first step is to separate the data in training and test:
+```{r}
+# Generate the split object:
+breast_split <- data_split <- initial_split(breast_dataset_norm, prop = 3/4)
+
+# Build the training breast data set (with 3/4 of the data)
+breast_training <- breast_split %>% training()
+# Obtain labels, it's necessary to keep track of labels but in a separate variable:
+breast_training_labels <- breast_training[, 1] 
+# Remove labels from training set:
+breast_training <- as.data.frame(breast_training[-1])
+
+# Build the testing breast data set:
+breast_test <- breast_split %>% testing()
+# Obtain labels:
+breast_test_labels <- breast_test[, 1] 
+# Remove labels from test set:
+breast_test <- as.data.frame(breast_test[-1])
+```
+
+## KNN
+
+In this part of the report, we will build and test a model based on **K-nearest neighbors (KNN)** algorithm.
+
+**KNN** is a classification method that estimates the likelihood that a data point will become a member of one group or another, calculating Euclidean distances.
+
+It is a supervised machine learning algorithm, we must provide the labels of the samples, in this case the diagnosis (Malignant (M), Benign (B)).
+
+As an initial parameter we must choose the number of nearest neighbors to include (K). In order to generate a model with high accuracy, we must test different K values. In this report, we have K = 21 as the performance of the model was appropriate (high accuracy and low number of false positive and negative), but other K values that lead to lower accuracy models were tried previously. It was a trial-error process.
+
+```{r}
+# Run KNN
+set.seed(111)
+knn_pred <- knn(train = breast_training, test = breast_test, cl = breast_training_labels, k=21,prob=TRUE)
+```
+
+Check the accuracy:
+```{r}
+cat("The accuracy of the KNN model is:",sum(knn_pred == breast_test_labels)/nrow(breast_test))
+```
+
+Check results:
+```{r, warning=FALSE}
+CrossTable(x = breast_test_labels, y = knn_pred, prop.chisq=FALSE)
+```
+
+```{r,warning=FALSE}
+# Generate a Confusion Matrix:
+conf_matrix <- data.frame(knn_pred,breast_test_labels)
+
+# Rename Columns
+names(conf_matrix) <- c("Predicted", "Actual")
+
+conf_matrix <- conf_mat(conf_matrix,  Actual,Predicted)
+
+autoplot(conf_matrix, type = "heatmap") +
+  scale_fill_gradient(low="slategray2",high = "mediumpurple3") +
+  theme(legend.position = "right") + labs(title = "KNN Confusion Matrix")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+ROC CURVE:
+```{r}
+knn.ROC <- roc(predictor=breast_test_labels, response=attributes(knn_pred)$prob)
+
+plot(knn.ROC)
+```
+
+Area Under the Curve (AUC):
+```{r}
+knn.ROC$auc
+```
+
+The previous Cross Table and confusion matrix allows to identify True positives (55 cases with malignant tumor), True negatives (79 cases with benignant tumor).
+
+We can also identify False negatives (8 cases that **KNN** predicted as negative, but in fact were positive) and False positives (1 case predicted as positive when it was negative).
+
+The ROC plot and Area Under the curve gives us insights in the model performance. The closer the AUC value to 1, the better prediction. The **KNN** model implemented in the report has an AUC = 0.75, further changes should be done in order to improve it. For example, the model could be improved with a previous pre-processing of data doing a z-score standardization, instead of the normalization done in this report.
+
+## Decision Tree
+
+**Decision Tree** is a classification algorithm that has a flowchart similar to a tree structure. 
+
+This model classifies instances by sorting them down the tree from the root to any leaf node, which provides the classification of the instance. It contains internal nodes that denote a test on a specific attribute, while each branch represents an outcome of the test. The terminal nodes contain class labels.
+
+The instances are classified by sorting them from the root to a leaf node, that will provide the classification of the instance.
+
+It is a non-parametric supervised learning method.
+
+In order to generate the Decision Tree model we will use the function  C5.0:
+```{r}
+# Transform labels to factor, necessary for the correct flow of the function:
+
+breast_training$diagnosis<-as.factor(breast_training_labels)
+
+breast_test['diagnosis'] = breast_test_labels
+breast_test$diagnosis<-as.factor(breast_test$diagnosis)
+
+# Set seed:
+set.seed(1111)
+# Generate the model:
+dt_model <-C5.0(diagnosis ~., data = breast_training)
+
+# Check:
+dt_model
+```
+
+Now make predictions with out testing dataset:
+```{r}
+dt_pred<- predict(dt_model, breast_test, type="class")
+```
+
+Check the accuracy:
+```{r}
+cat("The accuracy of the Decision Tree model is:",sum(dt_pred == breast_test$diagnosis)/nrow(breast_test))
+```
+
+Now we have to compare the predicted labels to the real labels of the test dataset:
+```{r}
+# Check results
+CrossTable(x = breast_test_labels, y = dt_pred, prop.chisq=FALSE)
+```
+
+```{r,warning=FALSE}
+# Generate a Confusion Matrix:
+conf_matrix2 <- data.frame(dt_pred,breast_test_labels)
+
+# Rename Columns
+names(conf_matrix2) <- c("Predicted", "Actual")
+
+conf_matrix2 <- conf_mat(conf_matrix2,  Actual,Predicted)
+
+autoplot(conf_matrix2, type = "heatmap") +
+  scale_fill_gradient(low="slategray2",high = "mediumpurple3") +
+  theme(legend.position = "right") + labs(title = "Decision Tree Confusion Matrix")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Comparing the Confusion matrices, for the **Decision Tree model**, we can see that the algorithm has a better performance than **KNN** when detecting positive cases, those that are malignant tumors. From a total number of 63 malignant tumors, it predicted 60. This result is better than KNN, which only predicted 55 cases. But on the other hand, we can see that with Decision Tree has a greater number of false positives (7 vs 1 in KNN), this model is prone to type 1 errors. 
+
+
+## Neural Network 
+
+**Neural Networks** consist of an artificial network of functions. These functions also called parameters (or neurons), allow to learn and to modify internal elements by learning from new data. Each neuron after getting an input, produces an output. The outputs are sent to the next of neurons, and so on. The process continues all layers have been considered, and then the terminal neurons then output the final result of the model.
+
+Generate a Neural Network model. The parameters are the ones recommended in literature:
+```{r}
+set.seed(1111)
+nn_model <-nnet(diagnosis ~. , data=breast_training, size=15, rang = 1, decay = 8e-4, maxit = 100)
+```
+
+Prediction using the previously generated Neural Network model:
+```{r}
+nn_pred <- predict(nn_model, breast_test,type = c("class"))
+```
+
+Check the accuracy:
+```{r}
+cat("The accuracy of the Neural Network model is:",sum(nn_pred == breast_test$diagnosis)/nrow(breast_test))
+```
+
+Check the numeric results in a table format:
+```{r}
+CrossTable(breast_test$diagnosis, nn_pred, prop.chisq = FALSE,prop.c = FALSE, prop.r = FALSE, dnn = c("Actual", "Predicted"))
+```
+
+```{r,warning=FALSE}
+# Generate a Confusion Matrix:
+conf_matrix3 <- data.frame(nn_pred,breast_test_labels)
+
+# Rename Columns
+names(conf_matrix3) <- c("Predicted", "Actual")
+
+conf_matrix3 <- conf_mat(conf_matrix3,  Actual,Predicted)
+
+autoplot(conf_matrix3, type = "heatmap") +
+  scale_fill_gradient(low="slategray2",high = "mediumpurple3") +
+  theme(legend.position = "right") + labs(title = "Neural Network Confusion Matrix")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Now plot the Neural-network as a diagram:
+```{r}
+plotnet(nn_model, alpha = 0.6,circle_cex = 2,cex_val = 0.8,circle_col = "mediumorchid2",bord_col = "mediumorchid2", prune_col = TRUE) 
+```
+
+If we compare with the results of **Neural Network** with the previous Confusion Matrices of **KNN** and **Decision Tree**, we can see that this model has the best performance. It has the lowest number of false positives as well as false negatives. Also, we can see that the accuracy is very high.
+
+We can also check the diagram and see the conformation of layers of the model.
+## Logistic Regression  
+
+**Logistic Regression** is another classification algorithm that can be used to assign observations to a discrete set.
+
+It is based on probabilities and the cost function is Sigmoid (or Logistic Function).
+
+
+```{r,warning=FALSE}
+lr_model <-train(diagnosis~.,data=breast_training,method="glm",family=binomial())
+
+varImp(lr_model)
+```
+
+Only 20 most important variables shown (out of 29).
+
+Prediction:
+```{r}
+set.seed(11111)
+lr_pred<-predict(lr_model,breast_test)
+```
+
+Check the accuracy:
+```{r}
+cat("The accuracy of the Logistic Regression is:",sum(lr_pred == breast_test$diagnosis)/nrow(breast_test))
+```
+
+Check the numeric results in a table format:
+```{r}
+CrossTable(x = breast_test_labels, y = lr_pred, prop.chisq=FALSE)
+```
+
+```{r,warning=FALSE}
+# Generate a Confusion Matrix:
+conf_matrix4 <- data.frame(lr_pred,breast_test_labels)
+
+# Rename Columns
+names(conf_matrix4) <- c("Predicted", "Actual")
+
+conf_matrix4 <- conf_mat(conf_matrix4,  Actual,Predicted)
+
+autoplot(conf_matrix4, type = "heatmap") +
+  scale_fill_gradient(low="slategray2",high = "mediumpurple3") +
+  theme(legend.position = "right") + labs(title = "Logistic Regression Confusion Matrix")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+From the Confusion Matrix we can see that this model has a greater number of false positives than the Neural Network, but a lower number of false negatives (we also have to take into account that the difference is not that big, only by 1 case). 
+
+This model is better at not mislabeling malignant tumors as benign, but instead, it mislabels a greater number of benign tumors as malignant.
+
+**Which of all models performs better for this data? Discuss.**
+
+According to the accuracy, the rank would be (from higher accuracy to lower): Neural Network, Logistic Regression, KNN and Decision Tree. 
+
+Of all the models, the **Neural Network** model is the one with a better performance (it has the highest accuracy value, 0.972028).
+
