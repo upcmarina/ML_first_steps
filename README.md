@@ -1,5 +1,5 @@
-# ML_first_steps
+# ML_marina
 
 *by* VALLEJO, Marina
 
-Summary of Machine Learning concepts and hands-on, useful for beginners.
+Summary of Machine Learning concepts and hands-on.
